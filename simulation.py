@@ -45,22 +45,26 @@ metric_over = col3.empty()
 
 st.divider()
 
-# --- LAYOUT GRAFIK ---
-# Kita bagi menjadi 2 baris
-# Baris 1: Live Trend & Log
-row1_col1, row1_col2 = st.columns([2, 1])
-with row1_col1:
-    st.subheader("📊 Live Payload Trend (Last 50 Trips)")
+# --- LAYOUT DASHBOARD ---
+# Kita bagi menjadi 2 Kolom Utama
+# Kiri: Grafik Payload & Log Live
+# Kanan: Leaderboard Exca (Tabel)
+
+col_left, col_right = st.columns([2, 1])
+
+with col_left:
+    st.subheader("📊 Live Payload Trend")
     chart_payload_placeholder = st.empty()
-with row1_col2:
+    
+    st.markdown("---")
     st.subheader("🚨 Live Alert Log")
     log_placeholder = st.empty()
 
-st.divider()
-
-# Baris 2: Analisa Excavator (FITUR BARU)
-st.subheader("🏗️ Top Excavator Underload Contributors")
-chart_exca_placeholder = st.empty()
+with col_right:
+    st.subheader("🏆 Top Exca Underload")
+    st.caption("Daftar unit loading yang paling sering mengisi kurang.")
+    # Placeholder untuk Tabel
+    table_exca_placeholder = st.empty()
 
 # --- LOGIC SIMULASI ---
 if uploaded_file is not None and start_btn:
@@ -72,10 +76,9 @@ if uploaded_file is not None and start_btn:
             df = pd.read_excel(uploaded_file)
             
         # 1. Cleaning Data
-        # Filter Data Sesuai Model
         df_clean = df[df['HaulModel'].astype(str).str.contains(target_model, case=False, na=False)].copy()
         
-        # Urutkan berdasarkan OID atau Waktu
+        # Sort Data
         if 'OID' in df_clean.columns:
             df_clean = df_clean.sort_values(by='OID')
         elif 'CycleHour' in df_clean.columns:
@@ -88,9 +91,8 @@ if uploaded_file is not None and start_btn:
             st.error(f"Tidak ditemukan data unit model '{target_model}' di file ini.")
             st.stop()
 
-        # Wadah Data
         history_data = []
-        underload_loaders = [] # List khusus untuk menampung nama Exca yang underload
+        underload_loaders = [] 
         
         progress_bar = st.progress(0)
         total_rows = len(df_clean)
@@ -101,23 +103,18 @@ if uploaded_file is not None and start_btn:
             
             # Cek Status
             status = "NORMAL"
-            color_code = "green"
-            loader_name = str(row.get('LoadingEq', 'Unknown')) # Ambil nama Loader
+            loader_name = str(row.get('LoadingEq', 'Unknown')) 
 
             if row['PayloadAct'] < min_payload:
                 status = "UNDERLOAD"
-                color_code = "red"
-                # Catat Exca yang bikin ulah
                 underload_loaders.append(loader_name)
-                
-                # Toast Notification
+                # Toast alert
                 st.toast(f"⚠️ Underload! {row['HaulingEq']} by {loader_name} ({row['PayloadAct']} T)", icon="📉")
                 
             elif row['PayloadAct'] > max_payload:
                 status = "OVERLOAD"
-                color_code = "orange"
             
-            # Append History Utama
+            # Append History
             row_data = {
                 'Time': i, 
                 'Unit': row['HaulingEq'],
@@ -139,8 +136,8 @@ if uploaded_file is not None and start_btn:
             metric_under.metric("Underload", under, delta_color="inverse")
             metric_over.metric("Overload", over, delta_color="inverse")
             
-            # B. Chart 1: Payload Trend (Bar Chart Unit)
-            recent_data = df_hist.tail(50)
+            # B. Chart Payload (Kiri Atas)
+            recent_data = df_hist.tail(40) # Tampilkan 40 trip terakhir
             fig_payload = px.bar(
                 recent_data, 
                 x="Unit", y="Payload", color="Status",
@@ -150,40 +147,39 @@ if uploaded_file is not None and start_btn:
             )
             fig_payload.add_hline(y=min_payload, line_dash="dash", line_color="red")
             fig_payload.add_hline(y=max_payload, line_dash="dash", line_color="orange")
-            chart_payload_placeholder.plotly_chart(fig_payload, use_container_width=True)
+            fig_payload.update_layout(showlegend=False, margin=dict(l=0, r=0, t=0, b=0))
             
-            # C. Chart 2: Top Exca Underload (Bar Chart Horizontal) - FITUR BARU
+            chart_payload_placeholder.plotly_chart(fig_payload, use_container_width=True, key=f"payload_{i}")
+            
+            # C. Tabel Leaderboard Exca (Kanan) - FITUR UPDATE
             if underload_loaders:
-                # Hitung frekuensi underload per Exca
+                # Hitung frekuensi
                 exca_counts = Counter(underload_loaders)
-                df_exca = pd.DataFrame.from_dict(exca_counts, orient='index', columns=['Count']).reset_index()
-                df_exca.columns = ['Loader', 'Count']
-                df_exca = df_exca.sort_values(by='Count', ascending=True) # Sort agar yang terbanyak di atas (di chart horizontal)
-
-                fig_exca = px.bar(
-                    df_exca, 
-                    x="Count", y="Loader", 
-                    orientation='h', 
-                    text="Count",
-                    color="Count",
-                    color_continuous_scale="Reds",
-                    title="Jumlah Kejadian Underload per Excavator"
+                df_exca = pd.DataFrame.from_dict(exca_counts, orient='index', columns=['Total Underload']).reset_index()
+                df_exca.columns = ['Unit Exca', 'Total Underload']
+                
+                # Urutkan dari yang terbanyak (Ranking 1 di atas)
+                df_exca = df_exca.sort_values(by='Total Underload', ascending=False).reset_index(drop=True)
+                
+                # Tampilkan Tabel dengan Highlight Warna Merah
+                table_exca_placeholder.dataframe(
+                    df_exca.style.background_gradient(subset=['Total Underload'], cmap='Reds'),
+                    use_container_width=True,
+                    hide_index=True
                 )
-                fig_exca.update_layout(xaxis_title="Jumlah Underload", yaxis_title="Unit Excavator")
-                chart_exca_placeholder.plotly_chart(fig_exca, use_container_width=True)
             else:
-                chart_exca_placeholder.info("Belum ada kejadian Underload.")
+                table_exca_placeholder.info("Belum ada Underload.")
 
-            # D. Log Feed
+            # D. Log Feed (Kiri Bawah)
             log_html = ""
             for _, log_row in df_hist.tail(5)[::-1].iterrows():
                 icon = "✅" if log_row['Status'] == 'NORMAL' else "⚠️" if log_row['Status'] == 'UNDERLOAD' else "⛔"
                 color = "green" if log_row['Status'] == 'NORMAL' else "red" if log_row['Status'] == 'UNDERLOAD' else "orange"
                 log_html += f"""
-                <div style="padding:5px; border-bottom:1px solid #ddd; font-size:14px;">
-                    <span style="font-size:18px">{icon}</span> 
-                    <b>{log_row['Unit']}</b> - <span style="color:{color}"><b>{log_row['Payload']} T</b></span> 
-                    <span style="color:gray; font-size:12px">({log_row['Loader']})</span>
+                <div style="padding:4px; border-bottom:1px solid #eee; font-size:13px;">
+                    <span style="font-size:16px">{icon}</span> 
+                    <b>{log_row['Unit']}</b> : <span style="color:{color}"><b>{log_row['Payload']} T</b></span> 
+                    <i style="color:gray;">({log_row['Loader']})</i>
                 </div>
                 """
             log_placeholder.markdown(log_html, unsafe_allow_html=True)
