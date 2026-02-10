@@ -1,0 +1,136 @@
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+
+# --- KONFIGURASI HALAMAN ---
+st.set_page_config(
+    page_title="Minestar Payload Analyzer",
+    page_icon="🚛",
+    layout="wide"
+)
+
+# --- SIDEBAR: KONFIGURASI ---
+st.sidebar.header("⚙️ Konfigurasi Parameter")
+
+# Upload File di Sidebar
+uploaded_file = st.sidebar.file_uploader("Upload CSV Minestar", type=["csv", "xlsx"])
+
+# Setting Threshold
+st.sidebar.subheader("Standar Payload (777)")
+min_payload = st.sidebar.number_input("Minimum (Ton)", value=90.0, step=1.0)
+max_payload = st.sidebar.number_input("Maksimum (Ton)", value=120.0, step=1.0)
+target_model = st.sidebar.text_input("Filter Model Unit", value="777")
+
+# --- JUDUL APLIKASI ---
+st.title("🚛 Minestar Payload Anomaly Detector")
+st.markdown(f"""
+Aplikasi ini mendeteksi unit **{target_model}** dengan payload di luar standar 
+(**<{min_payload}T** atau **>{max_payload}T**).
+""")
+
+# --- LOGIC UTAMA ---
+if uploaded_file is not None:
+    try:
+        # 1. Baca File
+        if uploaded_file.name.endswith('.csv'):
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = pd.read_excel(uploaded_file)
+
+        # 2. Preprocessing Data
+        # Pastikan nama kolom sesuai (berdasarkan sample data Anda sebelumnya)
+        required_columns = ['HaulModel', 'PayloadAct', 'HaulingEq', 'LoadingEq', 'CycleHour', 'OID']
+        
+        # Cek apakah kolom ada
+        if not set(required_columns).issubset(df.columns):
+            st.error(f"Format file salah! Pastikan ada kolom: {', '.join(required_columns)}")
+        else:
+            # Filter Unit (Case Insensitive)
+            df_target = df[df['HaulModel'].astype(str).str.contains(target_model, case=False, na=False)].copy()
+            
+            # Konversi Payload ke Angka (jika ada yang error/string)
+            df_target['PayloadAct'] = pd.to_numeric(df_target['PayloadAct'], errors='coerce')
+            df_target = df_target.dropna(subset=['PayloadAct'])
+
+            # 3. Deteksi Anomali
+            def get_status(payload):
+                if payload < min_payload:
+                    return 'UNDERLOAD'
+                elif payload > max_payload:
+                    return 'OVERLOAD'
+                else:
+                    return 'NORMAL'
+
+            df_target['Status'] = df_target['PayloadAct'].apply(get_status)
+            
+            # Filter hanya yang bermasalah
+            df_anomalies = df_target[df_target['Status'] != 'NORMAL'].sort_values(by='PayloadAct')
+
+            # --- TAMPILAN DASHBOARD ---
+            
+            # KPI Metrics
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Total Trip (777)", f"{len(df_target)} Trips")
+            col2.metric("Total Anomali", f"{len(df_anomalies)} Unit", delta_color="inverse")
+            col3.metric("Underload", f"{len(df_anomalies[df_anomalies['Status']=='UNDERLOAD'])}", delta_color="inverse")
+            col4.metric("Overload", f"{len(df_anomalies[df_anomalies['Status']=='OVERLOAD'])}", delta_color="inverse")
+
+            st.divider()
+
+            # TABEL DATA
+            st.subheader("📋 Daftar Unit Bermasalah")
+            
+            if not df_anomalies.empty:
+                # Coloring Function
+                def highlight_status(val):
+                    color = '#ff4b4b' if val == 'UNDERLOAD' else '#ffa420' if val == 'OVERLOAD' else ''
+                    return f'background-color: {color}; color: white'
+
+                # Tampilkan Tabel
+                st.dataframe(
+                    df_anomalies[['CycleHour', 'HaulingEq', 'LoadingEq', 'PayloadAct', 'Status', 'HaulModel']]
+                    .style.applymap(highlight_status, subset=['Status'])
+                    .format({'PayloadAct': "{:.2f}"}),
+                    use_container_width=True
+                )
+
+                # Tombol Download
+                csv = df_anomalies.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Data Anomali (CSV)",
+                    data=csv,
+                    file_name='minestar_anomalies.csv',
+                    mime='text/csv',
+                )
+                
+                # --- VISUALISASI ---
+                st.subheader("📊 Sebaran Payload")
+                
+                # Scatter Plot
+                fig = px.scatter(
+                    df_target, 
+                    x="CycleHour", 
+                    y="PayloadAct", 
+                    color="Status",
+                    hover_data=['HaulingEq', 'LoadingEq'],
+                    color_discrete_map={'NORMAL': 'green', 'UNDERLOAD': 'red', 'OVERLOAD': 'orange'},
+                    title=f"Distribusi Payload {target_model}"
+                )
+                # Tambah garis batas
+                fig.add_hline(y=min_payload, line_dash="dash", line_color="red", annotation_text="Min Limit")
+                fig.add_hline(y=max_payload, line_dash="dash", line_color="orange", annotation_text="Max Limit")
+                
+                st.plotly_chart(fig, use_container_width=True)
+
+            else:
+                st.success("✅ Tidak ada anomali ditemukan! Semua unit beroperasi sesuai standar.")
+
+    except Exception as e:
+        st.error(f"Terjadi kesalahan saat memproses file: {e}")
+else:
+    # Tampilan Awal jika belum upload
+    st.info("👈 Silahkan upload file CSV Minestar di panel sebelah kiri untuk memulai analisa.")
+    st.markdown("---")
+    st.markdown("**Contoh format data yang diharapkan:**")
+    st.code("OID, CycleHour, HaulModel, HaulingEq, LoadingEq, PayloadAct, ...")
+
